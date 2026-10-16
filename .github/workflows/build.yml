@@ -16,13 +16,76 @@ jobs:
         with:
           go-version: "1.23"
           cache-dependency-path: go/go.sum
-      - name: Go build & vet
+      - name: Go build
         working-directory: go
-        env:
-          GOFLAGS: ""
         run: |
           set -euo pipefail
           go version
           go build ./...
-          go vet ./internal/app/ ./wbios/ ./iosmain/ || true
           echo "go build OK"
+
+  build-ios:
+    needs: go-check
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      APP_NAME: "WB反代"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: go/go.sum
+
+      - name: Build Go core as iOS static library (c-archive)
+        working-directory: go
+        run: |
+          set -euo pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          CC=$(xcrun --sdk iphoneos -f clang)
+          export GOOS=ios GOARCH=arm64 CGO_ENABLED=1 CC
+          export CGO_CFLAGS="-isysroot $SDK -miphoneos-version-min=15.0 -arch arm64"
+          export CGO_LDFLAGS="-isysroot $SDK -miphoneos-version-min=15.0 -arch arm64"
+          go build -tags carchive -buildmode=c-archive -ldflags "-s -w" -o ../ios/GoLib/libwb.a ./iosmain
+          ls -la ../ios/GoLib/
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build .app
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project WB2API.xcodeproj \
+            -scheme WB2API \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            -quiet build 2>&1 | tail -120
+          find build/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" -exec ls -la {} \;
+
+      - name: Package IPA (unsigned)
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          cd build/Build/Products/Release-iphoneos
+          mkdir -p Payload
+          cp -R *.app Payload/
+          zip -qry "$APP_NAME.ipa" Payload
+          cp "$APP_NAME.ipa" "$GITHUB_WORKSPACE/$APP_NAME.ipa"
+          ls -la "$GITHUB_WORKSPACE/$APP_NAME.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: WB反代-ipa
+          path: "*.ipa"
+          if-no-files-found: error

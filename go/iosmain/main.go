@@ -17,6 +17,7 @@ package main
 import "C"
 
 import (
+	"encoding/json"
 	"unsafe"
 
 	"workbuddy2api/wbios"
@@ -76,6 +77,50 @@ func WbRunning() C.int {
 //
 //export WbUptime
 func WbUptime() C.int { return C.int(wbios.Uptime()) }
+
+// WbLoginStart 发起 OAuth：返回 {"ok":true,"data":"<授权URL>"} 或 {"ok":false,"error":"…"}。
+//
+//export WbLoginStart
+func WbLoginStart(cDataDir, cRealm *C.char) *C.char {
+	url, err := wbios.LoginStart(C.GoString(cDataDir), C.GoString(cRealm))
+	if err != nil {
+		return C.CString(errJSON(err))
+	}
+	b, _ := json.Marshal(map[string]any{"ok": true, "data": url})
+	return C.CString(string(b))
+}
+
+// WbLoginPoll 轮询授权结果：成功返回 {"ok":true,"data":"<账号JSON>"}，未完成/失败返回 {"ok":false,"error":"…"}。
+//
+//export WbLoginPoll
+func WbLoginPoll(cDataDir, cRealm *C.char) *C.char {
+	info, err := wbios.LoginPoll(C.GoString(cDataDir), C.GoString(cRealm))
+	if err != nil {
+		return C.CString(errJSON(err))
+	}
+	b, _ := json.Marshal(map[string]any{"ok": true, "data": json.RawMessage(info)})
+	return C.CString(string(b))
+}
+
+// WbLoginCancel 取消进行中的登录。
+//
+//export WbLoginCancel
+func WbLoginCancel(cDataDir *C.char) { wbios.LoginCancel(C.GoString(cDataDir)) }
+
+// WbDeleteAccount 删除账号凭证。
+//
+//export WbDeleteAccount
+func WbDeleteAccount(cDataDir, cUID *C.char) *C.char {
+	if err := wbios.DeleteAccount(C.GoString(cDataDir), C.GoString(cUID)); err != nil {
+		return C.CString(errJSON(err))
+	}
+	return C.CString(`{"ok":true}`)
+}
+
+func errJSON(err error) string {
+	b, _ := json.Marshal(map[string]any{"ok": false, "error": err.Error()})
+	return string(b)
+}
 
 // WbFree 释放由本库返回的 C 字符串。
 //
